@@ -6,21 +6,23 @@ import re
 import subprocess
 import sys
 
-def lrange(num1, num2 = None, step = 1):
-    op = operator.__le__
+def format_murmur(i):
+    return "%020d" % i
 
-    if num2 is None:
-        num1, num2 = 0, num1
-    if num2 < num1:
-        if step > 0:
-            num1 = num2
-        op = operator.__gt__
-    elif step < 0:
-        num1 = num2
+def format_md5(i):
+    return "%039d" % i
 
-    while op(num1, num2):
+def lrange(num1, num2 = None, step = 1, format = format_murmur):
+    offset = 0 if format == format_md5 else 2**63
+    max = 2**127-1 if format == format_md5 else 2**63-1
+    wrap = 2**128 if format == format_md5 else 2**64
+
+    print "%d %d" % (num1+offset, num2+offset)
+    while (num1 + offset < num2 + offset):
         yield num1
         num1 += step
+	if num1 > max:
+            num1 -= wrap
 
 def run_command(command, *args):
     cmd = " ".join([command] + list(args))
@@ -56,23 +58,44 @@ def get_host_token():
 
     return True, int(stdout.split()[2]), None
 
+def get_range_start(token, ring):
+    return ring[(ring.index(token) -1 + len(ring)) % len(ring)]
+
 def get_range_termination(token, ring):
-    for i in ring:
-        if token > i:
-            return i
+    return token
+#    for i in ring:
+#        if token > i:
+#            return i
+#
+#    if is_murmur_ring(ring):
+#        return 2**63 - 1
+#
+#    return 2**127 - 1
 
-    if is_murmur_ring(ring):
-        return 2**63 - 1
+def get_sub_range_generator(start, stop, steps=100, format=format_murmur):
+    min = 0 if format == format_md5 else -2**63
+    max = 2**127-1 if format == format_md5 else 2**63-1
+    wrap = 2**128 if format == format_md5 else 2**64
 
-    return 2**127 - 1
+    count = stop - start if stop > start else max-start + stop-min
+    step_increment = count / steps
 
-def get_sub_range_generator(start, stop, steps=100):
-    step_increment = abs(stop - start) / steps
-    for i in lrange(start + step_increment, stop + 1, step_increment):
-        yield start, i
-        start = i
-    if start < stop:
-        yield start, stop
+    done = 0
+    for step in xrange(steps):
+	if step == steps - 1:
+            step_increment = count - done
+	end = start + step_increment
+	if end > max:
+            end -= wrap
+	    print "wrapping start=%d, increment=%d, max=%d, end=%d" % (start, step_increment, max, end)
+	yield start, end
+        done += step_increment
+	start = end
+
+#    for i in lrange(start + step_increment, stop + 1, step_increment, format):
+#	print "start = %d, i = %d" % (start, i)
+#        yield start, i
+#        start = i
 
 def repair_range(keyspace, start, end):
     success, return_code, cmd, stdout, stderr = \
@@ -99,13 +122,14 @@ def repair_keyspace(keyspace, steps=100, verbose=True):
         print error
         return False
 
+    range_start = get_range_start(host_token, ring_tokens)
     range_termination = get_range_termination(host_token, ring_tokens)
     formatter = format_murmur if is_murmur_ring(ring_tokens) else format_md5
 
     if verbose:
-        print "repair over range (%s, %s] with %s steps for keyspace %s" % (formatter(host_token), formatter(range_termination), steps, keyspace)
+        print "repair over range (%s, %s] with %s steps for keyspace %s" % (formatter(range_start), formatter(range_termination), steps, keyspace)
 
-    for start, end in get_sub_range_generator(host_token, range_termination, steps):
+    for start, end in get_sub_range_generator(range_start, range_termination, steps):
         start = formatter(start)
         end = formatter(end)
 
