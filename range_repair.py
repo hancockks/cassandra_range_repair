@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import datetime
 
 def format_murmur(i):
     return "%020d" % i
@@ -12,17 +13,17 @@ def format_murmur(i):
 def format_md5(i):
     return "%039d" % i
 
-def lrange(num1, num2 = None, step = 1, format = format_murmur):
-    offset = 0 if format == format_md5 else 2**63
-    max = 2**127-1 if format == format_md5 else 2**63-1
-    wrap = 2**128 if format == format_md5 else 2**64
-
-    print "%d %d" % (num1+offset, num2+offset)
-    while (num1 + offset < num2 + offset):
-        yield num1
-        num1 += step
-	if num1 > max:
-            num1 -= wrap
+#def lrange(num1, num2 = None, step = 1, format = format_murmur):
+#    offset = 0 if format == format_md5 else 2**63
+#    max = 2**127-1 if format == format_md5 else 2**63-1
+#    wrap = 2**128 if format == format_md5 else 2**64
+#
+#    print "%d %d" % (num1+offset, num2+offset)
+#    while (num1 + offset < num2 + offset):
+#        yield num1
+#        num1 += step
+#        if num1 > max:
+#            num1 -= wrap
 
 def run_command(command, *args):
     cmd = " ".join([command] + list(args))
@@ -37,6 +38,26 @@ def is_murmur_ring(ring):
 
     return False
 
+def get_time():
+    #lazy, but efficient...chop to 3 decimals
+    return unicode(datetime.datetime.now())[:-3]
+    
+def get_keyspaces():
+    keyspaces = set([])
+    success, return_code, _, stdout, stderr = run_command("nodetool", "cfstats")
+    
+    if not success:
+        return False, [], stderr
+    
+    a = re.compile("^Keyspace: (.*)$")
+    
+    for line in stdout.split("\n"):
+        m = a.match(line)
+        if m is not None:
+            keyspaces.add(m.group(1))
+            
+    return True, keyspaces, None
+            
 def get_ring_tokens():
     tokens = []
     success, return_code, _, stdout, stderr = run_command("nodetool", "ring")
@@ -82,18 +103,17 @@ def get_sub_range_generator(start, stop, steps=100, format=format_murmur):
 
     done = 0
     for step in xrange(steps):
-	if step == steps - 1:
+        if step == steps - 1:
             step_increment = count - done
-	end = start + step_increment
-	if end > max:
+        end = start + step_increment
+        if end > max:
             end -= wrap
-	    print "wrapping start=%d, increment=%d, max=%d, end=%d" % (start, step_increment, max, end)
-	yield start, end
+        yield start, end
         done += step_increment
-	start = end
+        start = end
 
 #    for i in lrange(start + step_increment, stop + 1, step_increment, format):
-#	print "start = %d, i = %d" % (start, i)
+#   print "start = %d, i = %d" % (start, i)
 #        yield start, i
 #        start = i
 
@@ -127,14 +147,14 @@ def repair_keyspace(keyspace, steps=100, verbose=True):
     formatter = format_murmur if is_murmur_ring(ring_tokens) else format_md5
 
     if verbose:
-        print "repair over range (%s, %s] with %s steps for keyspace %s" % (formatter(range_start), formatter(range_termination), steps, keyspace)
+        print "%s repair over range (%s, %s] with %s steps for keyspace %s" % (get_time(), formatter(range_start), formatter(range_termination), steps, keyspace)
 
     for start, end in get_sub_range_generator(range_start, range_termination, steps):
         start = formatter(start)
         end = formatter(end)
 
         if verbose:
-            print "step %04d repairing range (%s, %s] for keyspace %s ... " % (steps, start, end, keyspace),
+            print "%s step %04d repairing range (%s, %s] for keyspace %s ... " % (get_time(), steps, start, end, keyspace),
         success, cmd, stdout, stderr = repair_range(keyspace, start, end)
         if not success:
             print "FAILED"
@@ -163,12 +183,28 @@ def main():
 
     (options, args) = parser.parse_args()
 
-    if not options.keyspace:
-        parser.print_help()
-        sys.exit(1)
+#    if not options.keyspace:
+#        parser.print_help()
+#        sys.exit(1)
 
-    if repair_keyspace(options.keyspace, options.steps, options.verbose):
+    if not options.keyspace:
+        sys_keyspaces = set(["system_traces", "system", "solr_admin", "system_auth", "OpsCenter"])
+        
+        success, keyspaces, error = get_keyspaces()
+        if not success:
+            print "Error fetching kesypaces"
+            print error
+            sys.exit(2)
+            
+        keyspaces = keyspaces.difference(sys_keyspaces)
+        for ks in keyspaces:
+            if not repair_keyspace(ks, options.steps, options.verbose):
+                sys.exit(2)
         sys.exit(0)
+        
+    else:
+        if repair_keyspace(options.keyspace, options.steps, options.verbose):
+            sys.exit(0)
 
     sys.exit(2)
 
