@@ -4,7 +4,7 @@ range_repair.py
 A Python script to repair the primary range of a Cassandra node in N discrete steps [using best practices](http://www.datastax.com/dev/blog/advanced-repair-techniques).
 
 ### Background
-When Cassandra begins the repair process it constructs a [merkle tree](http://en.wikipedia.org/wiki/Merkle_tree), which is a tree of hashes over segments of data that the node is responsible for. The node compares it's tree to that of the replicas, if there is a difference in the hash values for any of the nodes then the segment for that hash is requested from the replica and is re-inserted.
+When Cassandra begins the repair process it constructs a [merkle tree](http://en.wikipedia.org/wiki/Merkle_tree), which is a tree of hashes over segments of data that the node is responsible for. The node compares its tree to that of the replicas, if there is a difference in the hash values for any of the nodes then the segment for that hash is requested from the replica and is re-inserted.
 
 By default the Merkle tree for Cassandra represents 15 discreet segments, which means that the data on the node is broken into 15 pieces. If the data for one of these 15 pieces is different from that of the replicas then it will result in 1/15th of the data being streamed and re-inserted. This can cause problems for two use cases: dense nodes, and DSE Solr nodes running at or near capacity.
 
